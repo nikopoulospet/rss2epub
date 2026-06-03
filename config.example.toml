@@ -1,0 +1,20 @@
+[freshrss]
+url = "https://rss.example.com"
+username = "peter"
+# api_password pulled from env FRESHRSS_API_PASSWORD
+
+[fetch]
+max_articles = 50
+only_unread = true
+mark_read_after_upload = false
+
+[epub]
+include_images = true
+page_title_prefix = ""
+
+[output]
+# Where EPUBs are written locally (Drive upload not yet implemented)
+directory = "~/rss2rm-output"
+
+[state]
+path = "~/.local/state/rss2rm/synced.json"
