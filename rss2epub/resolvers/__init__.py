@@ -29,6 +29,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from .base import ResolveContext, Resolver
+from .images import ImageInlinerResolver
 from .twitter import TwitterLinkResolver
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,7 @@ logger = logging.getLogger(__name__)
 # To add a new resolver, import its class and add it here.
 _REGISTRY: dict[str, type] = {
     TwitterLinkResolver.CONFIG_KEY: TwitterLinkResolver,
+    ImageInlinerResolver.CONFIG_KEY: ImageInlinerResolver,
 }
 
 

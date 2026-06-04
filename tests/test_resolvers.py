@@ -1,7 +1,9 @@
 import unittest
+from unittest.mock import MagicMock, patch
 
 from rss2epub.resolvers import apply_resolvers, build_resolver_chain
 from rss2epub.resolvers.base import ResolveContext
+from rss2epub.resolvers.images import ImageInlinerResolver, _fetch_as_data_uri, _mime_from_url
 from rss2epub.resolvers.twitter import TwitterLinkResolver, _is_twitter_url
 
 
@@ -136,6 +138,118 @@ class TestTwitterLinkResolver(unittest.TestCase):
 
     def test_empty_input_returns_empty(self):
         self.assertEqual(self._resolver().resolve("", _ctx()), "")
+
+
+# ── ImageInlinerResolver ──────────────────────────────────────────────────────
+
+def _mock_image_response(content=b"\x89PNG", content_type="image/png"):
+    resp = MagicMock()
+    resp.headers = {"Content-Type": content_type}
+    resp.raise_for_status = MagicMock()
+    resp.iter_content = MagicMock(return_value=iter([content]))
+    return resp
+
+
+class TestImageInlinerResolver(unittest.TestCase):
+    def _resolver(self, **cfg) -> ImageInlinerResolver:
+        return ImageInlinerResolver(cfg)
+
+    @patch("rss2epub.resolvers.images.requests.get")
+    def test_replaces_remote_src_with_data_uri(self, mock_get):
+        mock_get.return_value = _mock_image_response()
+        html = '<p>Text</p><img src="https://example.com/photo.png"/>'
+        result = self._resolver().resolve(html, _ctx())
+        self.assertIn("data:image/png;base64,", result)
+        self.assertNotIn("https://example.com/photo.png", result)
+
+    @patch("rss2epub.resolvers.images.requests.get")
+    def test_resolves_relative_src_against_article_url(self, mock_get):
+        mock_get.return_value = _mock_image_response()
+        html = '<img src="/images/photo.png"/>'
+        ctx = _ctx(article_url="https://nakedcapitalism.com/article")
+        self._resolver().resolve(html, ctx)
+        called_url = mock_get.call_args[0][0]
+        self.assertEqual(called_url, "https://nakedcapitalism.com/images/photo.png")
+
+    def test_skips_data_uris(self):
+        html = '<img src="data:image/png;base64,abc123"/>'
+        result = self._resolver().resolve(html, _ctx())
+        self.assertIn("data:image/png;base64,abc123", result)
+
+    def test_skips_images_without_article_url_when_src_is_relative(self):
+        html = '<img src="/images/photo.png"/>'
+        ctx = _ctx(article_url="")
+        result = self._resolver().resolve(html, ctx)
+        self.assertIn("/images/photo.png", result)
+
+    @patch("rss2epub.resolvers.images.requests.get", side_effect=Exception("timeout"))
+    def test_keeps_original_src_on_fetch_failure(self, _):
+        html = '<img src="https://example.com/photo.png"/>'
+        result = self._resolver().resolve(html, _ctx())
+        self.assertIn("https://example.com/photo.png", result)
+
+    @patch("rss2epub.resolvers.images.requests.get")
+    def test_skips_oversized_images(self, mock_get):
+        big = _mock_image_response()
+        big.headers = {"Content-Type": "image/jpeg", "Content-Length": str(10 * 1024 * 1024)}
+        mock_get.return_value = big
+        html = '<img src="https://example.com/huge.jpg"/>'
+        result = self._resolver(max_bytes=1024).resolve(html, _ctx())
+        self.assertIn("https://example.com/huge.jpg", result)
+        self.assertNotIn("data:", result)
+
+    def test_non_image_content_unchanged(self):
+        html = "<p>No images here.</p>"
+        result = self._resolver().resolve(html, _ctx())
+        self.assertEqual(result, html)
+
+    def test_empty_input_returned_unchanged(self):
+        self.assertEqual(self._resolver().resolve("", _ctx()), "")
+
+    @patch("rss2epub.resolvers.images.requests.get")
+    def test_build_resolver_chain_creates_image_inliner(self, _):
+        chain = build_resolver_chain({"image-inline": {"timeout": 5}})
+        inliners = [r for r in chain if r.CONFIG_KEY == "image-inline"]
+        self.assertEqual(len(inliners), 1)
+        self.assertEqual(inliners[0].timeout, 5)
+
+
+class TestFetchAsDataUri(unittest.TestCase):
+    @patch("rss2epub.resolvers.images.requests.get")
+    def test_returns_data_uri_on_success(self, mock_get):
+        mock_get.return_value = _mock_image_response(b"\x89PNG", "image/png")
+        result = _fetch_as_data_uri("https://example.com/img.png", 10, 1_000_000)
+        self.assertIsNotNone(result)
+        self.assertTrue(result.startswith("data:image/png;base64,"))
+
+    @patch("rss2epub.resolvers.images.requests.get", side_effect=Exception("network error"))
+    def test_returns_none_on_exception(self, _):
+        self.assertIsNone(_fetch_as_data_uri("https://example.com/img.png", 10, 1_000_000))
+
+    @patch("rss2epub.resolvers.images.requests.get")
+    def test_returns_none_when_content_length_exceeds_max(self, mock_get):
+        resp = _mock_image_response()
+        resp.headers = {"Content-Type": "image/jpeg", "Content-Length": "999999"}
+        mock_get.return_value = resp
+        self.assertIsNone(_fetch_as_data_uri("https://example.com/img.jpg", 10, 1000))
+
+    @patch("rss2epub.resolvers.images.requests.get")
+    def test_falls_back_to_url_mime_when_content_type_missing(self, mock_get):
+        resp = _mock_image_response(b"data", "text/html")
+        mock_get.return_value = resp
+        result = _fetch_as_data_uri("https://example.com/img.png", 10, 1_000_000)
+        self.assertIn("image/png", result)
+
+
+class TestMimeFromUrl(unittest.TestCase):
+    def test_png(self):
+        self.assertEqual(_mime_from_url("https://example.com/img.png"), "image/png")
+
+    def test_jpg(self):
+        self.assertIn("jpeg", _mime_from_url("https://example.com/photo.jpg"))
+
+    def test_unknown_defaults_to_jpeg(self):
+        self.assertEqual(_mime_from_url("https://example.com/image"), "image/jpeg")
 
 
 class TestIsTwitterUrl(unittest.TestCase):
