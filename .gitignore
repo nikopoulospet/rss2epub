@@ -1,0 +1,14 @@
+# Output artifacts
+out/
+catalog.db
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Editor / OS
+.DS_Store

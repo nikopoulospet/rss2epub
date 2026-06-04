@@ -33,6 +33,7 @@ class Config:
     fetch: FetchConfig
     epub: EPUBConfig
     output: OutputConfig
+    resolver_config: dict  # raw TOML dict; resolver sections are read directly from here
 
 
 def parse_lookback(s: str) -> int:
@@ -67,4 +68,5 @@ def load_config(path: str | Path) -> Config:
         fetch=FetchConfig(**data.get("fetch", {})),
         epub=EPUBConfig(**data.get("epub", {})),
         output=OutputConfig(**data.get("output", {})),
+        resolver_config=data,
     )
