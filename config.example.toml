@@ -12,3 +12,12 @@ stylesheet = ""    # optional path to a CSS file for reader typography; empty = 
 [output]
 dir = "~/rss2epub/out"        # where .epub files are written (one per article)
 db  = "~/rss2epub/catalog.db" # SQLite catalog tracking content hashes and filenames
+
+# ── Content resolvers ──────────────────────────────────────────────────────────
+# Resolvers transform article HTML between fetch and EPUB build.
+# A resolver is enabled by the presence of its section below.
+# Remove or comment out a section to disable that resolver entirely.
+# Resolvers fail soft: a broken resolver never prevents an article from rendering.
+
+# [twitter-link]
+# replacement = "A fucking twitter link"   # text substituted for all Twitter/X embeds and links

@@ -12,6 +12,8 @@ from .catalog import Catalog, CatalogRow
 from .config import Config, load_config, parse_lookback
 from .epub import build_epub, stable_name, tidy_to_xhtml
 from .greader import GReaderClient
+from .resolvers import apply_resolvers, build_resolver_chain
+from .resolvers.base import ResolveContext
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +79,9 @@ def run(config: Config, dry_run: bool) -> RunStats:
     logger.info("Fetched %d items", stats.fetched)
 
     stylesheet = _load_stylesheet(config.epub.stylesheet)
+    resolver_chain = build_resolver_chain(config.resolver_config)
+    if resolver_chain:
+        logger.info("Resolvers: %s", [r.CONFIG_KEY for r in resolver_chain])
     catalog = Catalog(config.output.db)
     output_dir = Path(config.output.dir).expanduser()
 
@@ -90,6 +95,10 @@ def run(config: Config, dry_run: bool) -> RunStats:
     for item in items:
         try:
             xhtml = tidy_to_xhtml(item.content)
+            ctx = ResolveContext(item_id=item.id, title=item.title, article_url=item.url)
+            xhtml = apply_resolvers(xhtml, ctx, resolver_chain)
+            # Hash post-resolution: an upstream edit that only changes resolver
+            # output (e.g. a new tweet embed added) still triggers a re-render.
             fp = hashlib.sha256((item.title + xhtml).encode()).hexdigest()
             existing = catalog.lookup(item.id)
             state = classify(existing, fp)
