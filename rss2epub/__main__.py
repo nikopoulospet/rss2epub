@@ -10,8 +10,9 @@ from pathlib import Path
 
 from .catalog import Catalog, CatalogRow
 from .config import Config, load_config, parse_lookback
-from .epub import build_epub, stable_name, tidy_to_xhtml
+from .epub import build_epub, tidy_to_xhtml
 from .greader import GReaderClient
+from .output_path import check_confined, resolve_output_path
 from .resolvers import apply_resolvers, build_resolver_chain
 from .resolvers.base import ResolveContext
 
@@ -84,6 +85,7 @@ def run(config: Config, dry_run: bool) -> RunStats:
         logger.info("Resolvers: %s", [r.CONFIG_KEY for r in resolver_chain])
     catalog = Catalog(config.output.db)
     output_dir = Path(config.output.dir).expanduser()
+    fmt = config.output.format
 
     if dry_run:
         write_dir = Path(tempfile.mkdtemp(prefix="rss2epub-dry-"))
@@ -95,44 +97,61 @@ def run(config: Config, dry_run: bool) -> RunStats:
     for item in items:
         try:
             xhtml = tidy_to_xhtml(item.content)
-            ctx = ResolveContext(item_id=item.id, title=item.title, article_url=item.url)
+            ctx = ResolveContext(item_id=item.id, title=item.article_name, article_url=item.url)
             xhtml = apply_resolvers(xhtml, ctx, resolver_chain)
             # Hash post-resolution: an upstream edit that only changes resolver
             # output (e.g. a new tweet embed added) still triggers a re-render.
-            fp = hashlib.sha256((item.title + xhtml).encode()).hexdigest()
+            fp = hashlib.sha256((item.article_name + xhtml).encode()).hexdigest()
             existing = catalog.lookup(item.id)
             state = classify(existing, fp)
 
+            new_rel = resolve_output_path(fmt, item) + ".epub"
+            new_abs = check_confined(output_dir, new_rel)
+
             logger.debug(
                 "%-8s  %s  (%d bytes content)",
-                state.value, item.title[:70], len(item.content),
+                state.value, item.article_name[:70], len(item.content),
             )
 
             if state is State.UNCHANGED:
                 if not dry_run:
-                    catalog.touch(item.id, now)
+                    if existing.filename != new_rel:
+                        _move_epub(output_dir / existing.filename, new_abs)
+                        catalog.upsert(CatalogRow(
+                            item_id=item.id,
+                            content_hash=existing.content_hash,
+                            filename=new_rel,
+                            title=item.article_name,
+                            published=item.publish_date,
+                            last_seen=now,
+                            last_written=existing.last_written,
+                        ))
+                    else:
+                        catalog.touch(item.id, now)
                 stats.skipped += 1
                 continue
 
-            # Reuse the catalog's stored filename on re-renders so the path
-            # remains stable even if the article title was edited upstream.
-            filename = existing.filename if state is State.CHANGED else stable_name(item.id, item.title)
             epub_bytes = build_epub(
-                item.title,
+                item.article_name,
                 xhtml,
                 author=item.author,
                 source_url=item.url,
                 stylesheet=stylesheet,
             )
 
-            (write_dir / filename).write_bytes(epub_bytes)
+            write_path = write_dir / new_rel
+            write_path.parent.mkdir(parents=True, exist_ok=True)
+            write_path.write_bytes(epub_bytes)
+
             if not dry_run:
+                if state is State.CHANGED and existing.filename != new_rel:
+                    (output_dir / existing.filename).unlink(missing_ok=True)
                 catalog.upsert(CatalogRow(
                     item_id=item.id,
                     content_hash=fp,
-                    filename=filename,
-                    title=item.title,
-                    published=item.published,
+                    filename=new_rel,
+                    title=item.article_name,
+                    published=item.publish_date,
                     last_seen=now,
                     last_written=now,
                 ))
@@ -141,17 +160,25 @@ def run(config: Config, dry_run: bool) -> RunStats:
                 stats.new += 1
             else:
                 stats.changed += 1
-            logger.info("%-8s  %s  →  %s", state.value, item.title[:60], filename)
+            logger.info("%-8s  %s  →  %s", state.value, item.article_name[:60], new_rel)
 
         except Exception as exc:
             stats.failed += 1
-            logger.warning("FAILED    %r: %s", item.title, exc)
+            logger.warning("FAILED    %r: %s", item.article_name, exc)
 
     catalog.close()
     return stats
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
+
+def _move_epub(src: Path, dst: Path) -> None:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        src.rename(dst)
+    except FileNotFoundError:
+        pass
+
 
 def _load_stylesheet(path: str) -> str:
     if not path:

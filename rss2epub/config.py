@@ -3,6 +3,8 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
+from .output_path import DEFAULT_FORMAT, validate_template
+
 
 @dataclass
 class ServerConfig:
@@ -25,6 +27,10 @@ class EPUBConfig:
 class OutputConfig:
     dir: str = "~/rss2epub/out"
     db: str = "~/rss2epub/catalog.db"
+    format: str = DEFAULT_FORMAT
+
+    def __post_init__(self) -> None:
+        validate_template(self.format)
 
 
 @dataclass
@@ -59,6 +65,7 @@ def load_config(path: str | Path) -> Config:
         raise RuntimeError("RSS2EPUB_API_PASSWORD environment variable is not set")
 
     srv = data["server"]
+    output = OutputConfig(**data.get("output", {}))
     return Config(
         server=ServerConfig(
             url=srv["url"].rstrip("/"),
@@ -67,6 +74,6 @@ def load_config(path: str | Path) -> Config:
         ),
         fetch=FetchConfig(**data.get("fetch", {})),
         epub=EPUBConfig(**data.get("epub", {})),
-        output=OutputConfig(**data.get("output", {})),
+        output=output,
         resolver_config=data,
     )
