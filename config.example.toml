@@ -10,8 +10,14 @@ lookback = "30d"   # re-examine articles published within this window; accepts d
 stylesheet = ""    # optional path to a CSS file for reader typography; empty = no stylesheet
 
 [output]
-dir = "~/rss2epub/out"        # where .epub files are written (one per article)
-db  = "~/rss2epub/catalog.db" # SQLite catalog tracking content hashes and filenames
+dir    = "~/rss2epub/out"        # where .epub files are written (one per article)
+db     = "~/rss2epub/catalog.db" # SQLite catalog tracking content hashes and filenames
+# format = "{publish_date}/{article_name}"  # default: date-based subdirectories
+# Available fields: article_name, publish_date, feed_name, author
+# A "/" in the template creates a subdirectory; "/" inside a field value is sanitized away.
+# Each filename always ends with a short item_id hash for uniqueness.
+# Power-user example:
+# format = "{feed_name}/{publish_date}_{article_name}"
 
 # ── Content resolvers ──────────────────────────────────────────────────────────
 # Resolvers transform article HTML between fetch and EPUB build.

@@ -1,5 +1,5 @@
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import requests
 
@@ -8,13 +8,13 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class Article:
-    id: str
-    title: str
-    url: str
-    content: str
-    author: str
-    published: int
-    feed_title: str
+    id:           str = field(metadata={"template": False})
+    article_name: str = field(metadata={"template": True})   # article title
+    url:          str = field(metadata={"template": False})
+    content:      str = field(metadata={"template": False})
+    author:       str = field(metadata={"template": True})
+    publish_date: int = field(metadata={"template": True})   # unix timestamp; rendered as YYYY-MM-DD in paths
+    feed_name:    str = field(metadata={"template": True})   # feed title
 
 
 class GReaderClient:
@@ -115,12 +115,12 @@ def _parse_item(item: dict) -> Article:
     url = _first_href(item.get("canonical")) or _first_href(item.get("alternate")) or ""
     return Article(
         id=item["id"],
-        title=item.get("title", "Untitled"),
+        article_name=item.get("title", "Untitled"),
         url=url,
         content=_item_content(item),
         author=item.get("author", ""),
-        published=item.get("published", 0),
-        feed_title=item.get("origin", {}).get("title", ""),
+        publish_date=item.get("published", 0),
+        feed_name=item.get("origin", {}).get("title", ""),
     )
 
 

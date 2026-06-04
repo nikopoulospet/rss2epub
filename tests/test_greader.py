@@ -100,11 +100,11 @@ class TestGetArticlesSince(unittest.TestCase):
         client = _patched_client([{"items": [_item(published=self.CUTOFF + 1)]}])
         articles, _ = client.get_articles_since(self.CUTOFF)
         self.assertEqual(len(articles), 1)
-        self.assertEqual(articles[0].title, "Sample")
+        self.assertEqual(articles[0].article_name, "Sample")
         self.assertEqual(articles[0].url, "https://example.com/article")
         self.assertEqual(articles[0].content, "<p>Body text.</p>")
         self.assertEqual(articles[0].author, "Jane Doe")
-        self.assertEqual(articles[0].feed_title, "My Feed")
+        self.assertEqual(articles[0].feed_name, "My Feed")
 
     def test_stream_url_does_not_contain_greader_php(self):
         client = _patched_client([{"items": []}])
