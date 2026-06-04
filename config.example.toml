@@ -1,20 +1,14 @@
-[freshrss]
-url = "https://rss.example.com"
+[server]
+url      = "https://rss.example.com"
 username = "peter"
-# api_password pulled from env FRESHRSS_API_PASSWORD
+# API password is read from env: RSS2EPUB_API_PASSWORD  (never put secrets in this file)
 
 [fetch]
-max_articles = 50
-only_unread = true
-mark_read_after_upload = false
+lookback = "30d"   # re-examine articles published within this window; accepts d, h, w (e.g. "7d", "72h", "2w")
 
 [epub]
-include_images = true
-page_title_prefix = ""
+stylesheet = ""    # optional path to a CSS file for reader typography; empty = no stylesheet
 
 [output]
-# Where EPUBs are written locally (Drive upload not yet implemented)
-directory = "~/rss2rm-output"
-
-[state]
-path = "~/.local/state/rss2rm/synced.json"
+dir = "~/rss2epub/out"        # where .epub files are written (one per article)
+db  = "~/rss2epub/catalog.db" # SQLite catalog tracking content hashes and filenames

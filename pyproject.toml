@@ -1,16 +1,15 @@
 [project]
-name = "rss2rm"
+name = "rss2epub"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
     "requests>=2.31",
-    "readability-lxml>=0.8",
     "ebooklib>=0.18",
     "lxml>=4.9",
 ]
 
 [project.scripts]
-rss2rm = "rss2rm.__main__:main"
+rss2epub = "rss2epub.__main__:main"
 
 [build-system]
 requires = ["hatchling"]

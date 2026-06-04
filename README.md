@@ -1,34 +1,53 @@
-# rss2rm
+# rss2epub
 
 ## Why this exists
 
-The reMarkable 2 is a great reading device, but getting articles onto it is awkward. The official workflow requires either the browser extension (desktop only, no server-side automation) or manually saving URLs one at a time.
+The target reading device cannot run a syncing RSS client and can only consume EPUB files dropped into a file store — it pulls files; it does not fetch data itself.
 
-This tool closes that gap for self-hosted RSS readers. If you run FreshRSS, you already have a queue of articles you've marked worth reading — rss2rm turns that queue into a folder of EPUBs on your reMarkable, via Google Drive.
+Standard syncing RSS clients (Reeder, NetNewsWire, etc.) require running on the device — impossible here. Calibre's news-recipe system is the closest prior art, but it produces **issue bundles** (one large periodical EPUB per fetch), not individually addressable per-article files. That breaks the core requirement: the reader must track position per article, and the user wants to pull individual articles à la carte through the day. No existing open-source tool produces *per-article EPUB files with content-change-aware overwrite semantics* against a GReader backend.
 
-The design is deliberately minimal: a single CLI command you run when you want to sync. It fetches your unread articles from FreshRSS, runs each one through a readability extractor to strip away navigation and ads, packages each article as an EPUB, and drops the files into a Google Drive folder that your tablet can browse. Nothing runs on the tablet; nothing is installed on it. The render server does all the work.
+That specific orchestration — and only that — is what rss2epub does.
+
+---
+
+## What it does (and does not do)
+
+**Does:**
+- Authenticate to any GReader-compatible aggregator (FreshRSS, Miniflux) and fetch items within a configurable time window.
+- Render each new or changed item as **one EPUB per article** into a flat output directory.
+- On a content change, **overwrite the same file in place** — never rename, never version. The downstream reader keys reading-position to the file path, so overwrite-in-place preserves your place in a corrected article.
+- Track all of the above in a local SQLite catalog (content fingerprints + filenames).
+
+**Does not:**
+- Fetch full-text article pages from the web. Content fidelity is the aggregator's job — enable FreshRSS's full-text fetch per feed if the feed publishes excerpts only.
+- Embed images. Images referenced in the feed HTML appear as remote `<img>` tags in the EPUB.
+- Sync files to your device. The output directory is the deliverable; how it reaches the reader (Drive, Nextcloud, rclone, syncthing, manual copy) is your sink, not this tool's concern.
+- Track read state. Your e-reader owns reading position and read/unread state entirely.
+- Run on a schedule. Wrap the CLI in a `systemd --user` timer or cron when you want automation — the entrypoint is the unit of execution and does not change.
 
 ---
 
 ## How it works
 
 ```
-FreshRSS (GReader API)
+GReader aggregator (FreshRSS / Miniflux)
     │
+    │  stream/contents?ot={cutoff}  — items newer than (now − lookback)
     ▼
-fetch unread articles
-    │
-    ▼
-readability extract (fetches full article page)
-    │
-    ▼
-build EPUB (one file per article)
-    │
-    ▼
-write to output directory  ──▶  (later: upload to Google Drive)
+for each item:
+    xhtml  = tidy_to_xhtml(item.content)    # lxml: validity only, not extraction
+    fp     = sha256(title + xhtml)           # content fingerprint
+    state  = classify(item_id, fp, catalog)  # NEW | UNCHANGED | CHANGED
+    if state in (NEW, CHANGED):
+        write OUTPUT_DIR/{stable-name}.epub  # overwrite if CHANGED
+        catalog.upsert(item_id, fp, ...)
+    else:
+        skip
+
+print: fetched N, rendered M (new X / changed Y), skipped K, failed F
 ```
 
-On the tablet: open the Drive sidebar, browse to your folder, copy files to My Files.
+EPUB filenames are `{title-slug}-{id-hash}.epub`. The slug is for human readability; the ID hash is what makes the name **stable even if the title changes upstream** — the file is overwritten to the same path.
 
 ---
 
@@ -36,7 +55,8 @@ On the tablet: open the Drive sidebar, browse to your folder, copy files to My F
 
 - Python 3.11+
 - [uv](https://github.com/astral-sh/uv)
-- A [FreshRSS](https://freshrss.org) instance with API access enabled
+- A GReader-compatible aggregator (FreshRSS, Miniflux) with API access enabled
+- **Full-text fetch enabled per feed** in the aggregator, for feeds that publish excerpts only (this tool does not fetch article URLs)
 
 ---
 
@@ -45,106 +65,120 @@ On the tablet: open the Drive sidebar, browse to your folder, copy files to My F
 **1. Clone and install**
 
 ```bash
-git clone https://github.com/youruser/rss2rm
-cd rss2rm
+git clone https://github.com/youruser/rss2epub
+cd rss2epub
 uv venv
 uv pip install -e .
 ```
 
-**2. Enable the FreshRSS API**
+**2. Enable the aggregator API**
 
-In FreshRSS: Settings → Profile → scroll to "API Management" → set an API password. This is distinct from your login password and is what rss2rm uses — your login password will not work.
+In FreshRSS: Settings → Profile → API Management → set an API password.
+This is a separate credential from your login password.
 
 **3. Create a config file**
 
 ```bash
-mkdir -p ~/.config/rss2rm
-cp config.example.toml ~/.config/rss2rm/config.toml
+mkdir -p ~/.config/rss2epub
+cp config.example.toml ~/.config/rss2epub/config.toml
 ```
 
-Then edit `~/.config/rss2rm/config.toml` (see [Configuration](#configuration) below).
+Edit `~/.config/rss2epub/config.toml` — set `url` and `username` under `[server]`.
 
 **4. Set your API password**
 
 ```bash
-export FRESHRSS_API_PASSWORD=your-api-password
+export RSS2EPUB_API_PASSWORD=your-api-password
 ```
 
-Add this to your shell profile (`~/.bashrc`, `~/.zshrc`, etc.) to avoid re-entering it each session.
+Add this to your shell profile so it persists across sessions.
 
 ---
 
 ## Running
 
 ```bash
-# Dry run: fetch and convert articles, write EPUBs to a temp directory, no state changes
-.venv/bin/rss2rm --dry-run
+# Normal run
+rss2epub
 
-# Normal run: write EPUBs to the configured output directory, record synced IDs
-.venv/bin/rss2rm
+# Dry run: renders to a temp dir, no catalog writes, no overwrites
+rss2epub --dry-run
 
-# Limit to N articles (overrides max_articles in config)
-.venv/bin/rss2rm --limit 10
+# Override lookback for this run
+rss2epub --lookback 7d
 
-# Use a non-default config file
-.venv/bin/rss2rm --config /path/to/config.toml
+# Verbose: show API calls and per-item classify decisions
+rss2epub --verbose
+
+# Quiet: suppress info output (warnings and final summary only)
+rss2epub --quiet
+
+# Custom config
+rss2epub --config /path/to/config.toml
 ```
 
-Output looks like:
+**Example output (default INFO level):**
 
 ```
-Authenticating with FreshRSS...
-Fetching up to 50 unread articles...
-  OK  My-Article-Title-a1b2c3d4.epub
-  OK  Another-Article-e5f6g7h8.epub
-  ERR 'Paywalled Post': HTTP 403
-Done: fetched 3, converted 2, skipped 0, failed 1
+INFO     Authenticating as peter @ https://rss.example.com
+INFO     Fetching window: 2026-05-04 14:30 → now  (lookback: 30d)
+INFO     Fetched 43 items
+INFO     NEW       My Article Title  →  my-article-title-a1b2c3d4.epub
+INFO     CHANGED   Edited Post       →  edited-post-e5f6g7h8.epub
+fetched 43, rendered 2 (new 1 / changed 1), skipped 41, failed 0
 ```
 
-EPUBs are named `{sanitized-title}-{short-id-hash}.epub` to avoid collisions between articles with identical titles.
+The final summary line is always printed regardless of `-v`/`-q`.
+
+**Exit codes:** `0` = success, `1` = fatal error (auth/config), `2` = partial failure (some articles failed to render).
 
 ---
 
 ## Configuration
 
-`~/.config/rss2rm/config.toml`:
+`~/.config/rss2epub/config.toml`:
 
 ```toml
-[freshrss]
-url = "https://rss.example.com"
+[server]
+url      = "https://rss.example.com"
 username = "peter"
-# API password is read from the FRESHRSS_API_PASSWORD environment variable
+# API password from env: RSS2EPUB_API_PASSWORD
 
 [fetch]
-max_articles = 50          # max articles to fetch per run
-only_unread = true         # only fetch unread items
-mark_read_after_upload = false  # flip to true to use FreshRSS unread state as the sync queue
+lookback = "30d"    # window for edit-checking; accepts d, h, w (e.g. "7d", "72h", "2w")
 
 [epub]
-include_images = true      # keep <img> tags in the EPUB (remote URLs, not embedded)
-page_title_prefix = ""     # prepend a string to every article title, e.g. "[RSS] "
+stylesheet = ""     # optional path to a CSS file for reader typography
 
 [output]
-directory = "~/rss2rm-output"   # where EPUBs are written
-
-[state]
-path = "~/.local/state/rss2rm/synced.json"  # tracks which articles have been synced
+dir = "~/rss2epub/out"          # where EPUBs are written
+db  = "~/rss2epub/catalog.db"   # SQLite catalog
 ```
 
-### Deduplication and state
-
-rss2rm records the GReader item ID of every article it successfully converts. On the next run it skips those IDs. This means:
-
-- A failed conversion is retried automatically on the next run.
-- Deleting an EPUB from the output directory does **not** re-sync it — edit the state file to remove the ID if you want to re-convert an article.
-- If `mark_read_after_upload = true`, FreshRSS's own read state becomes the queue and the state file is belt-and-suspenders. If `false` (the default), the state file is the sole dedup mechanism — articles stay unread in FreshRSS.
+The config file is safe to commit to a dotfiles repo — secrets stay in the environment.
 
 ---
 
-## Running tests
+## The catalog
 
-```bash
-.venv/bin/python -m pytest tests/ -v
+`catalog.db` is a SQLite file tracking every article ever processed. It stores the content fingerprint, EPUB filename, and timestamps. You can query it directly:
+
+```sql
+-- recent renders
+SELECT title, datetime(last_written, 'unixepoch') FROM articles ORDER BY last_written DESC LIMIT 20;
+
+-- articles that changed since first render
+SELECT title FROM articles WHERE last_written > published + 86400;
+```
+
+**Edit detection:** the fingerprint is `sha256(title + tidy_xhtml)`, computed on the content the EPUB is actually built from (not the raw feed payload, which can carry rotating tracking tokens). A mismatch means the article was genuinely edited upstream.
+
+**Persistence:** article files stay in the output directory until you manually remove them. The lookback window controls which articles are *re-examined for edits* on each run — it does not prune already-written files. Articles older than the window stay on disk and in the catalog.
+
+**Force re-render:** delete the catalog row (or the entire catalog) and re-run.
+
+```sql
+DELETE FROM articles WHERE item_id = 'tag:google.com,...';
 ```
 
 ---
@@ -152,21 +186,18 @@ rss2rm records the GReader item ID of every article it successfully converts. On
 ## Project layout
 
 ```
-rss2rm/
-  __main__.py   CLI entry point — orchestration and summary output
-  config.py     TOML config loading, env-var secret resolution
-  freshrss.py   FreshRSS GReader API client (auth, fetch, mark-read)
-  epub.py       readability extraction → EPUB bytes
-  uploader.py   abstract Uploader interface
-  localdir.py   local directory implementation of Uploader
-  state.py      atomic load/save of synced article IDs
+rss2epub/
+  __main__.py   CLI + orchestration (classify, run loop, run stats)
+  config.py     TOML loading, lookback parser, env secret resolution
+  freshrss.py   GReader client (auth, windowed fetch, pagination)
+  epub.py       tidy_to_xhtml (lxml), stable_name, build_epub (ebooklib)
+  catalog.py    SQLite catalog (open/migrate, lookup, upsert, touch)
 ```
-
-`localdir.py` is a placeholder for the eventual Google Drive uploader. The interface is `upload(filename: str, data: bytes) -> bool` — swapping in Drive changes one file only.
 
 ---
 
-## Roadmap
+## Running tests
 
-- [ ] Google Drive uploader (`drive.py`) so EPUBs land directly in the Drive folder visible to the reMarkable
-- [ ] `systemd --user` timer example for automated periodic sync
+```bash
+uv run pytest tests/ -v
+```
